@@ -3,5 +3,5 @@ resolver = "2"
 members = ["crates/*", "examples/*"]
 
 [workspace.dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", rev = "e30720a781ad5e4bee9ab6e5c9f228baffef466c", package = "gpui" }
+gpui = { git = "https://github.com/leohenon/zed", rev = "3f9c69d138b38384160c09c1cc5c19ff1feea32f", package = "gpui" }
 smallvec = { version = "1.15", features = ["const_new"] }
