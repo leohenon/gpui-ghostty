@@ -984,6 +984,9 @@ impl TerminalView {
             }
         }
 
+        let utf8 = keystroke.key_char.as_deref().unwrap_or("");
+        let is_repeat = event.is_held;
+
         if !keystroke.modifiers.control
             && !keystroke.modifiers.alt
             && keystroke.key_char.is_some()
@@ -991,9 +994,6 @@ impl TerminalView {
         {
             return;
         }
-
-        let utf8 = keystroke.key_char.as_deref().unwrap_or("");
-        let is_repeat = event.is_held;
 
         if let Some(encoded) = self.session.encode_key(
             &keystroke.key,
@@ -1967,7 +1967,7 @@ impl Element for TerminalTextElement {
         let focus_handle = { self.view.read(cx).focus_handle.clone() };
         window.handle_input(
             &focus_handle,
-            ElementInputHandler::new(bounds, self.view.clone()),
+            ElementInputHandler::new(bounds, self.view.clone()).apple_press_and_hold_enabled(false),
             cx,
         );
 
