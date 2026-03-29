@@ -236,6 +236,7 @@ pub struct TerminalView {
     marked_selected_range_utf16: Range<usize>,
     font: gpui::Font,
     font_features: gpui::FontFeatures,
+    resize_callback: Option<std::sync::Arc<dyn Fn(u16, u16, u16, u16) + Send + Sync>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -275,6 +276,7 @@ impl TerminalView {
             marked_selected_range_utf16: 0..0,
             font: crate::default_terminal_font(),
             font_features: crate::default_terminal_font_features(),
+            resize_callback: None,
         }
         .with_refreshed_viewport()
     }
@@ -331,8 +333,16 @@ impl TerminalView {
             marked_selected_range_utf16: 0..0,
             font: crate::default_terminal_font(),
             font_features: crate::default_terminal_font_features(),
+            resize_callback: None,
         }
         .with_refreshed_viewport()
+    }
+
+    pub fn set_resize_callback(
+        &mut self,
+        callback: std::sync::Arc<dyn Fn(u16, u16, u16, u16) + Send + Sync>,
+    ) {
+        self.resize_callback = Some(callback);
     }
 
     fn utf16_len(s: &str) -> usize {
@@ -677,7 +687,24 @@ impl TerminalView {
     }
 
     pub fn resize_terminal(&mut self, cols: u16, rows: u16, cx: &mut Context<Self>) {
-        let _ = self.session.resize(cols, rows);
+        let (cell_width_px, cell_height_px) = self
+            .last_bounds
+            .and_then(|bounds| {
+                let width = f32::from(bounds.size.width);
+                let height = f32::from(bounds.size.height);
+                if cols == 0 || rows == 0 {
+                    return None;
+                }
+                Some((
+                    (width / cols as f32).round().max(1.0) as u32,
+                    (height / rows as f32).round().max(1.0) as u32,
+                ))
+            })
+            .unwrap_or((0, 0));
+        let _ = self.session.resize(cols, rows, cell_width_px, cell_height_px);
+        if let Some(callback) = self.resize_callback.as_ref() {
+            callback(cols, rows, cell_width_px as u16, cell_height_px as u16);
+        }
         self.sync_viewport_scroll_tracking();
         self.pending_refresh = true;
         cx.notify();
@@ -1496,6 +1523,27 @@ impl Element for TerminalTextElement {
         let cell_width = cell_metrics(window, &font, &font_features).map(|(w, _)| px(w));
 
         self.view.update(cx, |view, _cx| {
+            if let Some((cell_width_px, cell_height_px)) =
+                cell_metrics(window, &view.font, &view.font_features)
+            {
+                let cols = ((f32::from(bounds.size.width) / cell_width_px).floor() as u16).max(1);
+                let rows = ((f32::from(bounds.size.height) / cell_height_px).floor() as u16).max(1);
+                let cell_width_px = cell_width_px.round().max(1.0) as u32;
+                let cell_height_px = cell_height_px.round().max(1.0) as u32;
+
+                if view.session.cols() != cols || view.session.rows() != rows {
+                    let _ = view
+                        .session
+                        .resize(cols, rows, cell_width_px, cell_height_px);
+                    if let Some(callback) = view.resize_callback.as_ref() {
+                        callback(cols, rows, cell_width_px as u16, cell_height_px as u16);
+                    }
+                    view.refresh_viewport();
+                }
+            }
+
+            view.last_bounds = Some(bounds);
+
             if view.viewport_lines.is_empty() {
                 view.line_layouts.clear();
                 view.line_layout_key = None;

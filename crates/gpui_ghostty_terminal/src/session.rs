@@ -247,9 +247,16 @@ impl TerminalSession {
         Ok(())
     }
 
-    pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), Error> {
+    pub fn resize(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
+    ) -> Result<(), Error> {
         self.config.cols = cols;
         self.config.rows = rows;
-        self.terminal.resize(cols, rows, 0, 0)
+        self.terminal
+            .resize(cols, rows, cell_width_px, cell_height_px)
     }
 }
