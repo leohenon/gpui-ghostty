@@ -497,9 +497,15 @@ impl TerminalView {
 
             rs.begin_cell_iteration();
             while rs.next_cell() {
-                let fg = rs.cell_fg().unwrap_or(default_fg);
-                let bg = rs.cell_bg().unwrap_or(default_bg);
+                let mut fg = rs.cell_fg().unwrap_or(default_fg);
+                let mut bg = rs.cell_bg().unwrap_or(default_bg);
                 let style = rs.cell_style();
+                if style.inverse {
+                    std::mem::swap(&mut fg, &mut bg);
+                }
+                if style.invisible {
+                    fg = bg;
+                }
                 let flags = style_to_flags(&style);
 
                 if has_run && (fg != run_fg || bg != run_bg || flags != run_flags) {
