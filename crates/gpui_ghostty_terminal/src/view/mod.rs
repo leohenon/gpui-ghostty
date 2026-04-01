@@ -1250,7 +1250,7 @@ struct TerminalPrepaintState {
     shaped_lines: Vec<gpui::ShapedLine>,
     background_quads: Vec<PaintQuad>,
     selection_quads: Vec<PaintQuad>,
-    box_drawing_quads: Vec<PaintQuad>,
+    graphics_quads: Vec<PaintQuad>,
     marked_text: Option<(gpui::ShapedLine, gpui::Point<Pixels>)>,
     marked_text_background: Option<PaintQuad>,
     cursor: Option<PaintQuad>,
@@ -1330,11 +1330,15 @@ pub(crate) fn box_drawing_mask(ch: char) -> Option<(u8, f32)> {
         '┬' | '┳' | '╦' => BOX_DIR_LEFT | BOX_DIR_RIGHT | BOX_DIR_DOWN,
         '┴' | '┻' | '╩' => BOX_DIR_LEFT | BOX_DIR_RIGHT | BOX_DIR_UP,
         '┼' | '╋' | '╬' => BOX_DIR_LEFT | BOX_DIR_RIGHT | BOX_DIR_UP | BOX_DIR_DOWN,
+        '╴' | '╸' => BOX_DIR_LEFT,
+        '╵' | '╹' => BOX_DIR_UP,
+        '╶' | '╺' => BOX_DIR_RIGHT,
+        '╷' | '╻' => BOX_DIR_DOWN,
         _ => return None,
     };
 
     let scale = match ch {
-        '━' | '┃' | '┏' | '┓' | '┗' | '┛' | '┣' | '┫' | '┳' | '┻' | '╋' => {
+        '━' | '┃' | '┏' | '┓' | '┗' | '┛' | '┣' | '┫' | '┳' | '┻' | '╋' | '╸' | '╹' | '╺' | '╻' => {
             heavy
         }
         '═' | '║' | '╔' | '╗' | '╚' | '╝' | '╠' | '╣' | '╦' | '╩' | '╬' => {
@@ -1344,6 +1348,167 @@ pub(crate) fn box_drawing_mask(ch: char) -> Option<(u8, f32)> {
     };
 
     Some((mask, scale))
+}
+
+fn push_fractional_fill(
+    quads: &mut Vec<PaintQuad>,
+    bounds: Bounds<Pixels>,
+    color: gpui::Hsla,
+    x0: f32,
+    x1: f32,
+    y0: f32,
+    y1: f32,
+) {
+    quads.push(fill(
+        Bounds::from_corners(
+            point(
+                bounds.left() + bounds.size.width * x0,
+                bounds.top() + bounds.size.height * y0,
+            ),
+            point(
+                bounds.left() + bounds.size.width * x1,
+                bounds.top() + bounds.size.height * y1,
+            ),
+        ),
+        color,
+    ));
+}
+
+fn is_supported_block_element(ch: char) -> bool {
+    matches!(
+        ch,
+        '▀' | '▁'
+            | '▂'
+            | '▃'
+            | '▄'
+            | '▅'
+            | '▆'
+            | '▇'
+            | '█'
+            | '▉'
+            | '▊'
+            | '▋'
+            | '▌'
+            | '▍'
+            | '▎'
+            | '▏'
+            | '▐'
+            | '▔'
+            | '▕'
+            | '▖'
+            | '▗'
+            | '▘'
+            | '▙'
+            | '▚'
+            | '▛'
+            | '▜'
+            | '▝'
+            | '▞'
+            | '▟'
+    )
+}
+
+fn is_special_graphic_char(ch: char) -> bool {
+    box_drawing_mask(ch).is_some() || is_supported_block_element(ch)
+}
+
+fn block_element_quads_for_char(
+    bounds: Bounds<Pixels>,
+    color: gpui::Hsla,
+    ch: char,
+) -> Vec<PaintQuad> {
+    let mut quads = Vec::new();
+
+    match ch {
+        '▀' => push_fractional_fill(&mut quads, bounds, color, 0.0, 1.0, 0.0, 0.5),
+        '▁' => push_fractional_fill(&mut quads, bounds, color, 0.0, 1.0, 0.875, 1.0),
+        '▂' => push_fractional_fill(&mut quads, bounds, color, 0.0, 1.0, 0.75, 1.0),
+        '▃' => push_fractional_fill(&mut quads, bounds, color, 0.0, 1.0, 0.625, 1.0),
+        '▄' => push_fractional_fill(&mut quads, bounds, color, 0.0, 1.0, 0.5, 1.0),
+        '▅' => push_fractional_fill(&mut quads, bounds, color, 0.0, 1.0, 0.375, 1.0),
+        '▆' => push_fractional_fill(&mut quads, bounds, color, 0.0, 1.0, 0.25, 1.0),
+        '▇' => push_fractional_fill(&mut quads, bounds, color, 0.0, 1.0, 0.125, 1.0),
+        '█' => push_fractional_fill(&mut quads, bounds, color, 0.0, 1.0, 0.0, 1.0),
+        '▉' => push_fractional_fill(&mut quads, bounds, color, 0.0, 0.875, 0.0, 1.0),
+        '▊' => push_fractional_fill(&mut quads, bounds, color, 0.0, 0.75, 0.0, 1.0),
+        '▋' => push_fractional_fill(&mut quads, bounds, color, 0.0, 0.625, 0.0, 1.0),
+        '▌' => push_fractional_fill(&mut quads, bounds, color, 0.0, 0.5, 0.0, 1.0),
+        '▍' => push_fractional_fill(&mut quads, bounds, color, 0.0, 0.375, 0.0, 1.0),
+        '▎' => push_fractional_fill(&mut quads, bounds, color, 0.0, 0.25, 0.0, 1.0),
+        '▏' => push_fractional_fill(&mut quads, bounds, color, 0.0, 0.125, 0.0, 1.0),
+        '▐' => push_fractional_fill(&mut quads, bounds, color, 0.5, 1.0, 0.0, 1.0),
+        '▔' => push_fractional_fill(&mut quads, bounds, color, 0.0, 1.0, 0.0, 0.125),
+        '▕' => push_fractional_fill(&mut quads, bounds, color, 0.875, 1.0, 0.0, 1.0),
+        '▖' => push_fractional_fill(&mut quads, bounds, color, 0.0, 0.5, 0.5, 1.0),
+        '▗' => push_fractional_fill(&mut quads, bounds, color, 0.5, 1.0, 0.5, 1.0),
+        '▘' => push_fractional_fill(&mut quads, bounds, color, 0.0, 0.5, 0.0, 0.5),
+        '▙' => {
+            push_fractional_fill(&mut quads, bounds, color, 0.0, 0.5, 0.0, 0.5);
+            push_fractional_fill(&mut quads, bounds, color, 0.0, 0.5, 0.5, 1.0);
+            push_fractional_fill(&mut quads, bounds, color, 0.5, 1.0, 0.5, 1.0);
+        }
+        '▚' => {
+            push_fractional_fill(&mut quads, bounds, color, 0.0, 0.5, 0.0, 0.5);
+            push_fractional_fill(&mut quads, bounds, color, 0.5, 1.0, 0.5, 1.0);
+        }
+        '▛' => {
+            push_fractional_fill(&mut quads, bounds, color, 0.0, 0.5, 0.0, 0.5);
+            push_fractional_fill(&mut quads, bounds, color, 0.5, 1.0, 0.0, 0.5);
+            push_fractional_fill(&mut quads, bounds, color, 0.0, 0.5, 0.5, 1.0);
+        }
+        '▜' => {
+            push_fractional_fill(&mut quads, bounds, color, 0.0, 0.5, 0.0, 0.5);
+            push_fractional_fill(&mut quads, bounds, color, 0.5, 1.0, 0.0, 0.5);
+            push_fractional_fill(&mut quads, bounds, color, 0.5, 1.0, 0.5, 1.0);
+        }
+        '▝' => push_fractional_fill(&mut quads, bounds, color, 0.5, 1.0, 0.0, 0.5),
+        '▞' => {
+            push_fractional_fill(&mut quads, bounds, color, 0.5, 1.0, 0.0, 0.5);
+            push_fractional_fill(&mut quads, bounds, color, 0.0, 0.5, 0.5, 1.0);
+        }
+        '▟' => {
+            push_fractional_fill(&mut quads, bounds, color, 0.5, 1.0, 0.0, 0.5);
+            push_fractional_fill(&mut quads, bounds, color, 0.0, 0.5, 0.5, 1.0);
+            push_fractional_fill(&mut quads, bounds, color, 0.5, 1.0, 0.5, 1.0);
+        }
+        _ => {}
+    }
+
+    quads
+}
+
+fn graphics_quads_for_char(
+    bounds: Bounds<Pixels>,
+    line_height: Pixels,
+    cell_width: f32,
+    color: gpui::Hsla,
+    ch: char,
+) -> Vec<PaintQuad> {
+    if box_drawing_mask(ch).is_some() {
+        return box_drawing_quads_for_char(bounds, line_height, cell_width, color, ch);
+    }
+
+    if is_supported_block_element(ch) {
+        return block_element_quads_for_char(bounds, color, ch);
+    }
+
+    Vec::new()
+}
+
+fn sanitize_line_for_graphics(line: &str) -> Option<String> {
+    let mut changed = false;
+    let mut sanitized = String::with_capacity(line.len());
+
+    for ch in line.chars() {
+        if is_special_graphic_char(ch) {
+            sanitized.push(' ');
+            changed = true;
+        } else {
+            sanitized.push(ch);
+        }
+    }
+
+    changed.then_some(sanitized)
 }
 
 fn box_drawing_quads_for_char(
@@ -1431,6 +1596,88 @@ fn text_run_for_key(base_font: &gpui::Font, key: TextRunKey, len: usize) -> Text
         underline,
         strikethrough,
     }
+}
+
+fn shape_terminal_line(
+    window: &mut Window,
+    line: &str,
+    style_runs: &[StyleRun],
+    font_size: Pixels,
+    run_font: &gpui::Font,
+    run_color: gpui::Hsla,
+    cell_width: Option<Pixels>,
+) -> gpui::ShapedLine {
+    let text = SharedString::from(line.to_string());
+    let mut runs: Vec<TextRun> = Vec::new();
+
+    if !style_runs.is_empty() {
+        let mut byte_pos = 0usize;
+        for style in style_runs {
+            let key = TextRunKey {
+                fg: style.fg,
+                flags: style.flags
+                    & (CELL_STYLE_FLAG_BOLD
+                        | CELL_STYLE_FLAG_ITALIC
+                        | CELL_STYLE_FLAG_UNDERLINE
+                        | CELL_STYLE_FLAG_FAINT
+                        | CELL_STYLE_FLAG_STRIKETHROUGH),
+            };
+
+            let start =
+                byte_index_for_column_in_line(text.as_str(), style.start_col).min(text.len());
+            let end = byte_index_for_column_in_line(text.as_str(), style.end_col.saturating_add(1))
+                .min(text.len());
+
+            if start > byte_pos {
+                runs.push(TextRun {
+                    len: start.saturating_sub(byte_pos),
+                    font: run_font.clone(),
+                    color: run_color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                });
+                byte_pos = start;
+            }
+
+            if end > start {
+                runs.push(text_run_for_key(run_font, key, end.saturating_sub(start)));
+                byte_pos = end;
+            }
+        }
+
+        if byte_pos < text.len() {
+            runs.push(TextRun {
+                len: text.len().saturating_sub(byte_pos),
+                font: run_font.clone(),
+                color: run_color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            });
+        }
+    }
+
+    if runs.is_empty() {
+        runs.push(TextRun {
+            len: text.len(),
+            font: run_font.clone(),
+            color: run_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+
+    let force_width = cell_width.and_then(|cell_width| {
+        use unicode_width::UnicodeWidthChar as _;
+        let has_wide = text.as_str().chars().any(|ch| ch.width().unwrap_or(0) > 1);
+        (!has_wide).then_some(cell_width)
+    });
+
+    window
+        .text_system()
+        .shape_line(text, font_size, &runs, force_width)
 }
 
 pub(crate) fn byte_index_for_column_in_line(line: &str, col: u16) -> usize {
@@ -1574,81 +1821,14 @@ impl Element for TerminalTextElement {
                     continue;
                 }
 
-                let text = SharedString::from(line.clone());
-                let mut runs: Vec<TextRun> = Vec::new();
-
-                if let Some(style_runs) = view.viewport_style_runs.get(idx)
-                    && !style_runs.is_empty()
-                {
-                    let mut byte_pos = 0usize;
-                    for style in style_runs.iter() {
-                        let key = TextRunKey {
-                            fg: style.fg,
-                            flags: style.flags
-                                & (CELL_STYLE_FLAG_BOLD
-                                    | CELL_STYLE_FLAG_ITALIC
-                                    | CELL_STYLE_FLAG_UNDERLINE
-                                    | CELL_STYLE_FLAG_FAINT
-                                    | CELL_STYLE_FLAG_STRIKETHROUGH),
-                        };
-
-                        let start = byte_index_for_column_in_line(text.as_str(), style.start_col)
-                            .min(text.len());
-                        let end = byte_index_for_column_in_line(
-                            text.as_str(),
-                            style.end_col.saturating_add(1),
-                        )
-                        .min(text.len());
-
-                        if start > byte_pos {
-                            runs.push(TextRun {
-                                len: start.saturating_sub(byte_pos),
-                                font: run_font.clone(),
-                                color: run_color,
-                                background_color: None,
-                                underline: None,
-                                strikethrough: None,
-                            });
-                            byte_pos = start;
-                        }
-
-                        if end > start {
-                            runs.push(text_run_for_key(&run_font, key, end.saturating_sub(start)));
-                            byte_pos = end;
-                        }
-                    }
-
-                    if byte_pos < text.len() {
-                        runs.push(TextRun {
-                            len: text.len().saturating_sub(byte_pos),
-                            font: run_font.clone(),
-                            color: run_color,
-                            background_color: None,
-                            underline: None,
-                            strikethrough: None,
-                        });
-                    }
-                }
-
-                if runs.is_empty() {
-                    runs.push(TextRun {
-                        len: text.len(),
-                        font: run_font.clone(),
-                        color: run_color,
-                        background_color: None,
-                        underline: None,
-                        strikethrough: None,
-                    });
-                }
-
-                let force_width = cell_width.and_then(|cell_width| {
-                    use unicode_width::UnicodeWidthChar as _;
-                    let has_wide = text.as_str().chars().any(|ch| ch.width().unwrap_or(0) > 1);
-                    (!has_wide).then_some(cell_width)
-                });
-                let shaped = window
-                    .text_system()
-                    .shape_line(text, font_size, &runs, force_width);
+                let style_runs = view
+                    .viewport_style_runs
+                    .get(idx)
+                    .map(|runs| runs.as_slice())
+                    .unwrap_or(&[]);
+                let shaped = shape_terminal_line(
+                    window, line, style_runs, font_size, &run_font, run_color, cell_width,
+                );
                 *slot = Some(shaped);
             }
         });
@@ -1689,7 +1869,7 @@ impl Element for TerminalTextElement {
             })
             .unwrap_or_default();
 
-        let (shaped_lines, selection, line_offsets) = {
+        let (shaped_lines, selection, line_offsets, viewport_lines, viewport_style_runs) = {
             let view = self.view.read(cx);
             (
                 view.line_layouts
@@ -1698,8 +1878,26 @@ impl Element for TerminalTextElement {
                     .collect::<Vec<_>>(),
                 view.selection,
                 view.viewport_line_offsets.clone(),
+                view.viewport_lines.clone(),
+                view.viewport_style_runs.clone(),
             )
         };
+
+        let mut paint_lines = shaped_lines.clone();
+        for (row, line) in viewport_lines.iter().enumerate() {
+            let Some(sanitized) = sanitize_line_for_graphics(line) else {
+                continue;
+            };
+            let style_runs = viewport_style_runs
+                .get(row)
+                .map(|runs| runs.as_slice())
+                .unwrap_or(&[]);
+            if let Some(slot) = paint_lines.get_mut(row) {
+                *slot = shape_terminal_line(
+                    window, &sanitized, style_runs, font_size, &run_font, run_color, cell_width,
+                );
+            }
+        }
 
         let (marked_text, cursor_position, font) = {
             let view = self.view.read(cx);
@@ -1827,16 +2025,15 @@ impl Element for TerminalTextElement {
             })
             .unwrap_or_default();
 
-        let box_drawing_quads = cell_metrics(window, &font, &font_features)
+        let graphics_quads = cell_metrics(window, &font, &font_features)
             .map(|(cell_width, _)| {
                 use unicode_width::UnicodeWidthChar as _;
                 let default_fg = run_color;
                 let mut quads = Vec::new();
 
-                let view = self.view.read(cx);
-                for (row, line) in view.viewport_lines.iter().enumerate() {
+                for (row, line) in viewport_lines.iter().enumerate() {
                     let y = bounds.top() + line_height * row as f32;
-                    let runs = view.viewport_style_runs.get(row).map(|v| v.as_slice());
+                    let runs = viewport_style_runs.get(row).map(|v| v.as_slice());
                     let mut run_idx: usize = 0;
 
                     let mut col = 1usize;
@@ -1846,7 +2043,7 @@ impl Element for TerminalTextElement {
                             continue;
                         }
 
-                        if let Some((_, _)) = box_drawing_mask(ch) {
+                        if is_special_graphic_char(ch) {
                             let fg = runs
                                 .and_then(|runs| {
                                     while let Some(run) = runs.get(run_idx) {
@@ -1877,7 +2074,7 @@ impl Element for TerminalTextElement {
                             let x = bounds.left() + px(cell_width * (col.saturating_sub(1)) as f32);
                             let cell_bounds =
                                 Bounds::new(point(x, y), size(px(cell_width), line_height));
-                            quads.extend(box_drawing_quads_for_char(
+                            quads.extend(graphics_quads_for_char(
                                 cell_bounds,
                                 line_height,
                                 cell_width,
@@ -1946,10 +2143,10 @@ impl Element for TerminalTextElement {
 
         TerminalPrepaintState {
             line_height,
-            shaped_lines,
+            shaped_lines: paint_lines,
             background_quads,
             selection_quads,
-            box_drawing_quads,
+            graphics_quads,
             marked_text,
             marked_text_background,
             cursor,
@@ -2002,7 +2199,7 @@ impl Element for TerminalTextElement {
                 );
             }
 
-            for quad in prepaint.box_drawing_quads.drain(..) {
+            for quad in prepaint.graphics_quads.drain(..) {
                 window.paint_quad(quad);
             }
 
@@ -2150,6 +2347,16 @@ mod tests {
 
         let local = window_position_to_local(bounds, gpui::point(gpui::px(110.0), gpui::px(30.0)));
         assert_eq!(local, gpui::point(gpui::px(10.0), gpui::px(10.0)));
+    }
+
+    #[test]
+    fn graphics_helpers_cover_opencode_glyphs() {
+        assert!(super::box_drawing_mask('╹').is_some());
+        assert!(super::is_supported_block_element('▀'));
+        assert_eq!(
+            super::sanitize_line_for_graphics("┃▀╹text").as_deref(),
+            Some("   text")
+        );
     }
 
     #[test]
