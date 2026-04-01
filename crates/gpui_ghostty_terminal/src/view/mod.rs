@@ -63,7 +63,6 @@ fn is_named_key(key: &str) -> bool {
             | "enter"
             | "tab"
             | "escape"
-            | "space"
     ) || key.starts_with('f')
         && key.len() >= 2
         && key.as_bytes()[1].is_ascii_digit()
@@ -1016,6 +1015,7 @@ impl TerminalView {
                 self.apply_side_effects(cx);
                 self.schedule_viewport_refresh(cx);
             }
+            cx.stop_propagation();
         }
     }
 
