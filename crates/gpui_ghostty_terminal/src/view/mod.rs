@@ -231,7 +231,7 @@ pub struct TerminalView {
     viewport_total_len: usize,
     viewport_style_runs: Vec<Vec<StyleRun>>,
     line_layouts: Vec<Option<gpui::ShapedLine>>,
-    line_layout_key: Option<(Pixels, Pixels)>,
+    line_layout_key: Option<(Pixels, Pixels, Pixels)>,
     last_bounds: Option<Bounds<Pixels>>,
     focus_handle: FocusHandle,
     last_window_title: Option<String>,
@@ -1094,9 +1094,10 @@ impl TerminalView {
             return None;
         }
 
-        let (_, cell_height) = cell_metrics(window, &self.font, &self.font_features)?;
+        let position = self.mouse_position_to_local(position);
+        let line_height = self.viewport_line_height(window)?;
         let y = f32::from(position.y);
-        let mut row_index = (y / cell_height).floor() as i32;
+        let mut row_index = (y / line_height).floor() as i32;
         if row_index < 0 {
             row_index = 0;
         }
@@ -1130,12 +1131,15 @@ impl TerminalView {
         let rows = self.session.rows();
 
         let position = self.mouse_position_to_local(position);
-        let (cell_width, cell_height) = cell_metrics(window, &self.font, &self.font_features)?;
+        let (cell_width, _) = cell_metrics(window, &self.font, &self.font_features)?;
+        let bounds = self.last_bounds?;
+        let cell_width = f32::from(viewport_cell_width(bounds.size.width, cols, px(cell_width)));
         let x = f32::from(position.x);
+        let line_height = self.viewport_line_height(window)?;
         let y = f32::from(position.y);
 
         let mut col = (x / cell_width).floor() as i32 + 1;
-        let mut row = (y / cell_height).floor() as i32 + 1;
+        let mut row = (y / line_height).floor() as i32 + 1;
 
         if col < 1 {
             col = 1;
@@ -1151,6 +1155,16 @@ impl TerminalView {
         }
 
         Some((col as u16, row as u16))
+    }
+
+    fn viewport_line_height(&self, window: &mut Window) -> Option<f32> {
+        let bounds = self.last_bounds?;
+        let (_, cell_height) = cell_metrics(window, &self.font, &self.font_features)?;
+        Some(f32::from(viewport_line_height(
+            bounds.size.height,
+            self.session.rows(),
+            px(cell_height),
+        )))
     }
 
     fn mouse_position_to_local(
@@ -1237,20 +1251,27 @@ impl EntityInputHandler for TerminalView {
     ) -> Option<Bounds<Pixels>> {
         let (col, row) = self.session.cursor_position()?;
         let (cell_width, cell_height) = cell_metrics(window, &self.font, &self.font_features)?;
+        let cell_width = viewport_cell_width(
+            element_bounds.size.width,
+            self.session.cols(),
+            px(cell_width),
+        );
+        let line_height = viewport_line_height(
+            element_bounds.size.height,
+            self.session.rows(),
+            px(cell_height),
+        );
 
-        let base_x = element_bounds.left() + px(cell_width * (col.saturating_sub(1)) as f32);
-        let base_y = element_bounds.top() + px(cell_height * (row.saturating_sub(1)) as f32);
+        let base_x = element_bounds.left() + cell_width * (col.saturating_sub(1)) as f32;
+        let base_y = element_bounds.top() + line_height * (row.saturating_sub(1)) as f32;
 
         let offset_cells = self
             .marked_text
             .as_ref()
             .map(|text| Self::cell_offset_for_utf16(text.as_str(), range_utf16.start))
             .unwrap_or(range_utf16.start);
-        let x = base_x + px(cell_width * offset_cells as f32);
-        Some(Bounds::new(
-            point(x, base_y),
-            size(px(cell_width), px(cell_height)),
-        ))
+        let x = base_x + cell_width * offset_cells as f32;
+        Some(Bounds::new(point(x, base_y), size(cell_width, line_height)))
     }
 
     fn character_index_for_point(
@@ -1294,6 +1315,22 @@ fn hsla_from_rgb(rgb: Rgb) -> gpui::Hsla {
         a: 1.0,
     };
     rgba.into()
+}
+
+fn viewport_line_height(height: Pixels, rows: u16, fallback: Pixels) -> Pixels {
+    if rows == 0 {
+        return fallback;
+    }
+
+    px((f32::from(height) / rows as f32).max(1.0))
+}
+
+fn viewport_cell_width(width: Pixels, cols: u16, fallback: Pixels) -> Pixels {
+    if cols == 0 {
+        return fallback;
+    }
+
+    px((f32::from(width) / cols as f32).max(1.0))
 }
 
 fn cursor_color_for_background(background: Rgb) -> gpui::Hsla {
@@ -1871,12 +1908,12 @@ impl Element for TerminalTextElement {
         style.color = hsla_from_rgb(default_fg);
         let rem_size = window.rem_size();
         let font_size = style.font_size.to_pixels(rem_size);
-        let line_height = style.line_height.to_pixels(style.font_size, rem_size);
+        let layout_line_height = style.line_height.to_pixels(style.font_size, rem_size);
 
         let run_font = style.font();
         let run_color = style.color;
 
-        let cell_width = cell_metrics(window, &font, &font_features).map(|(w, _)| px(w));
+        let layout_cell_width = cell_metrics(window, &font, &font_features).map(|(w, _)| px(w));
 
         self.view.update(cx, |view, _cx| {
             if let Some((cell_width_px, cell_height_px)) =
@@ -1906,10 +1943,14 @@ impl Element for TerminalTextElement {
                 return;
             }
 
-            if view.line_layout_key != Some((font_size, line_height))
+            let effective_cell_width = layout_cell_width
+                .map(|width| viewport_cell_width(bounds.size.width, view.session.cols(), width))
+                .unwrap_or(px(0.0));
+
+            if view.line_layout_key != Some((font_size, layout_line_height, effective_cell_width))
                 || view.line_layouts.len() != view.viewport_lines.len()
             {
-                view.line_layout_key = Some((font_size, line_height));
+                view.line_layout_key = Some((font_size, layout_line_height, effective_cell_width));
                 view.line_layouts = vec![None; view.viewport_lines.len()];
             }
 
@@ -1929,6 +1970,9 @@ impl Element for TerminalTextElement {
                     .get(idx)
                     .map(|runs| runs.as_slice())
                     .unwrap_or(&[]);
+                let cell_width = layout_cell_width.map(|width| {
+                    viewport_cell_width(bounds.size.width, view.session.cols(), width)
+                });
                 let shaped = shape_terminal_line(
                     window, line, style_runs, font_size, &run_font, run_color, cell_width,
                 );
@@ -1936,9 +1980,17 @@ impl Element for TerminalTextElement {
             }
         });
 
+        let (cols, rows) = {
+            let view = self.view.read(cx);
+            (view.session.cols(), view.session.rows())
+        };
+        let cell_width =
+            layout_cell_width.map(|width| viewport_cell_width(bounds.size.width, cols, width));
+        let line_height = viewport_line_height(bounds.size.height, rows, layout_line_height);
+
         let default_bg = { self.view.read(cx).session.default_background() };
-        let background_quads = cell_metrics(window, &font, &font_features)
-            .map(|(cell_width, _)| {
+        let background_quads = cell_width
+            .map(|cell_width| {
                 let origin = bounds.origin;
                 let mut quads: Vec<PaintQuad> = Vec::new();
 
@@ -1954,10 +2006,9 @@ impl Element for TerminalTextElement {
                             continue;
                         }
 
-                        let x =
-                            origin.x + px(cell_width * (run.start_col.saturating_sub(1)) as f32);
-                        let w = px(cell_width
-                            * (run.end_col.saturating_sub(run.start_col).saturating_add(1)) as f32);
+                        let x = origin.x + cell_width * (run.start_col.saturating_sub(1)) as f32;
+                        let w = cell_width
+                            * (run.end_col.saturating_sub(run.start_col).saturating_add(1)) as f32;
                         let color = rgba(
                             (u32::from(run.bg.r) << 24)
                                 | (u32::from(run.bg.g) << 16)
@@ -2020,13 +2071,9 @@ impl Element for TerminalTextElement {
             }
         }
 
-        let (marked_text, cursor_position, font) = {
+        let (marked_text, cursor_position) = {
             let view = self.view.read(cx);
-            (
-                view.marked_text.clone(),
-                view.session.cursor_position(),
-                view.font.clone(),
-            )
+            (view.marked_text.clone(), view.session.cursor_position())
         };
 
         let (marked_text, marked_text_background) = marked_text
@@ -2035,9 +2082,9 @@ impl Element for TerminalTextElement {
                     return None;
                 }
                 let (col, row) = cursor_position?;
-                let (cell_width, _) = cell_metrics(window, &font, &font_features)?;
+                let cell_width = cell_width?;
 
-                let origin_x = bounds.left() + px(cell_width * (col.saturating_sub(1)) as f32);
+                let origin_x = bounds.left() + cell_width * (col.saturating_sub(1)) as f32;
                 let origin_y = bounds.top() + line_height * (row.saturating_sub(1)) as f32;
                 let origin = point(origin_x, origin_y);
 
@@ -2056,7 +2103,7 @@ impl Element for TerminalTextElement {
                 let force_width = {
                     use unicode_width::UnicodeWidthChar as _;
                     let has_wide = text.as_str().chars().any(|ch| ch.width().unwrap_or(0) > 1);
-                    (!has_wide).then_some(px(cell_width))
+                    (!has_wide).then_some(cell_width)
                 };
                 let shaped =
                     window
@@ -2089,7 +2136,7 @@ impl Element for TerminalTextElement {
                 };
 
                 let marked_text_background = fill(
-                    Bounds::new(origin, size(px(cell_width * cell_len as f32), line_height)),
+                    Bounds::new(origin, size(cell_width * cell_len as f32, line_height)),
                     rgba(
                         (u32::from(bg.r) << 24)
                             | (u32::from(bg.g) << 16)
@@ -2152,8 +2199,8 @@ impl Element for TerminalTextElement {
             })
             .unwrap_or_default();
 
-        let graphics_quads = cell_metrics(window, &font, &font_features)
-            .map(|(cell_width, _)| {
+        let graphics_quads = cell_width
+            .map(|cell_width| {
                 use unicode_width::UnicodeWidthChar as _;
                 let default_fg = run_color;
                 let mut quads = Vec::new();
@@ -2198,13 +2245,13 @@ impl Element for TerminalTextElement {
                                 })
                                 .unwrap_or(default_fg);
 
-                            let x = bounds.left() + px(cell_width * (col.saturating_sub(1)) as f32);
+                            let x = bounds.left() + cell_width * (col.saturating_sub(1)) as f32;
                             let cell_bounds =
-                                Bounds::new(point(x, y), size(px(cell_width), line_height));
+                                Bounds::new(point(x, y), size(cell_width, line_height));
                             quads.extend(graphics_quads_for_char(
                                 cell_bounds,
                                 line_height,
-                                cell_width,
+                                f32::from(cell_width),
                                 fg,
                                 ch,
                             ));
