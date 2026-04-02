@@ -4,7 +4,7 @@ mod session;
 
 pub mod view;
 
-pub use config::TerminalConfig;
+pub use config::{TerminalConfig, TerminalTheme};
 pub use font::{default_terminal_font, default_terminal_font_features};
 pub use ghostty_vt::{CursorVisualStyle, Rgb};
 pub use session::TerminalSession;

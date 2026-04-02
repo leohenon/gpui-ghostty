@@ -95,6 +95,14 @@ pub struct CellStyle {
     pub underline_color: Option<Rgb>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RenderStateColors {
+    pub background: Rgb,
+    pub foreground: Rgb,
+    pub cursor: Option<Rgb>,
+    pub palette: [Rgb; 256],
+}
+
 fn style_color_to_rgb(sc: &GhosttyStyleColor) -> Option<Rgb> {
     match sc.tag {
         GHOSTTY_STYLE_COLOR_RGB => Some(unsafe { sc.value.rgb }.into()),
@@ -431,6 +439,28 @@ impl RenderState {
             )
         };
         val.into()
+    }
+
+    pub fn colors(&self) -> RenderStateColors {
+        let mut val = GhosttyRenderStateColors {
+            size: std::mem::size_of::<GhosttyRenderStateColors>(),
+            background: GhosttyColorRgb { r: 0, g: 0, b: 0 },
+            foreground: GhosttyColorRgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+            cursor: GhosttyColorRgb { r: 0, g: 0, b: 0 },
+            cursor_has_value: false,
+            palette: [GhosttyColorRgb { r: 0, g: 0, b: 0 }; 256],
+        };
+        let _ = unsafe { ghostty_render_state_colors_get(self.state, &mut val) };
+        RenderStateColors {
+            background: val.background.into(),
+            foreground: val.foreground.into(),
+            cursor: val.cursor_has_value.then_some(val.cursor.into()),
+            palette: val.palette.map(Into::into),
+        }
     }
 
     pub fn cursor_info(&self) -> CursorInfo {

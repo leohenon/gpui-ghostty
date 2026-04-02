@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
 
-use ghostty_vt::{Error, KeyEncoder, RenderState, Rgb, Terminal};
+use ghostty_vt::{Error, KeyEncoder, RenderState, RenderStateColors, Rgb, Terminal};
 
 use crate::TerminalConfig;
 
@@ -89,6 +89,9 @@ impl TerminalSession {
         terminal.set_title_changed_callback(Some(title_changed_callback));
         terminal.set_device_attributes_callback(Some(device_attributes_callback));
 
+        apply_initial_theme(&terminal, &config);
+        let _ = render_state.update(&terminal);
+
         Ok(Self {
             config,
             terminal,
@@ -114,6 +117,12 @@ impl TerminalSession {
         let _ = self.render_state.update(&self.terminal);
     }
 
+    pub fn apply_config(&mut self, config: TerminalConfig) {
+        self.config = config;
+        apply_initial_theme(&self.terminal, &self.config);
+        self.update_render_state();
+    }
+
     pub fn cols(&self) -> u16 {
         self.terminal.cols()
     }
@@ -123,11 +132,30 @@ impl TerminalSession {
     }
 
     pub fn default_foreground(&self) -> Rgb {
-        self.config.default_fg
+        self.render_state.foreground()
     }
 
     pub fn default_background(&self) -> Rgb {
-        self.config.default_bg
+        self.render_state.background()
+    }
+
+    pub fn cursor_color(&self) -> Option<Rgb> {
+        self.render_state
+            .colors()
+            .cursor
+            .or(self.config.theme.cursor)
+    }
+
+    pub fn selection_background(&self) -> Option<Rgb> {
+        self.config.theme.selection_background
+    }
+
+    pub fn selection_foreground(&self) -> Option<Rgb> {
+        self.config.theme.selection_foreground
+    }
+
+    pub fn colors(&self) -> RenderStateColors {
+        self.render_state.colors()
     }
 
     pub fn bracketed_paste_enabled(&self) -> bool {
@@ -258,5 +286,116 @@ impl TerminalSession {
         self.config.rows = rows;
         self.terminal
             .resize(cols, rows, cell_width_px, cell_height_px)
+    }
+}
+
+fn apply_initial_theme(terminal: &Terminal, config: &TerminalConfig) {
+    for seq in initial_theme_sequences(config) {
+        terminal.vt_write(&seq);
+    }
+}
+
+fn initial_theme_sequences(config: &TerminalConfig) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+
+    for (index, color) in config.theme.palette.iter().enumerate() {
+        if let Some(color) = color {
+            out.push(osc_palette(index as u16, *color));
+        }
+    }
+
+    out.push(osc_special(
+        10,
+        config.theme.foreground.unwrap_or(config.default_fg),
+    ));
+    out.push(osc_special(
+        11,
+        config.theme.background.unwrap_or(config.default_bg),
+    ));
+
+    if let Some(color) = config.theme.cursor {
+        out.push(osc_special(12, color));
+    }
+
+    out
+}
+
+fn osc_palette(index: u16, color: Rgb) -> Vec<u8> {
+    format!(
+        "\x1b]4;{index};rgb:{:02X}/{:02X}/{:02X}\x1b\\",
+        color.r, color.g, color.b
+    )
+    .into_bytes()
+}
+
+fn osc_special(code: u16, color: Rgb) -> Vec<u8> {
+    format!(
+        "\x1b]{code};rgb:{:02X}/{:02X}/{:02X}\x1b\\",
+        color.r, color.g, color.b
+    )
+    .into_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{initial_theme_sequences, osc_palette, osc_special};
+    use crate::{TerminalConfig, TerminalTheme};
+    use ghostty_vt::Rgb;
+
+    #[test]
+    fn initial_theme_sequences_emit_palette_defaults_and_cursor() {
+        let mut config = TerminalConfig::default();
+        config.default_fg = Rgb {
+            r: 0x11,
+            g: 0x22,
+            b: 0x33,
+        };
+        config.default_bg = Rgb {
+            r: 0x44,
+            g: 0x55,
+            b: 0x66,
+        };
+        config.theme = TerminalTheme {
+            cursor: Some(Rgb {
+                r: 0x77,
+                g: 0x88,
+                b: 0x99,
+            }),
+            palette: {
+                let mut palette = [None; 256];
+                palette[1] = Some(Rgb {
+                    r: 0xAA,
+                    g: 0xBB,
+                    b: 0xCC,
+                });
+                palette
+            },
+            ..TerminalTheme::default()
+        };
+
+        let seq = initial_theme_sequences(&config);
+        assert_eq!(seq[0], osc_palette(1, config.theme.palette[1].unwrap()));
+        assert_eq!(seq[1], osc_special(10, config.default_fg));
+        assert_eq!(seq[2], osc_special(11, config.default_bg));
+        assert_eq!(seq[3], osc_special(12, config.theme.cursor.unwrap()));
+    }
+
+    #[test]
+    fn initial_theme_sequences_prefer_theme_defaults() {
+        let mut config = TerminalConfig::default();
+        config.theme.foreground = Some(Rgb {
+            r: 0xFE,
+            g: 0xDC,
+            b: 0xBA,
+        });
+        config.theme.background = Some(Rgb {
+            r: 0x12,
+            g: 0x34,
+            b: 0x56,
+        });
+
+        let seq = initial_theme_sequences(&config);
+        assert_eq!(seq[0], osc_special(10, config.theme.foreground.unwrap()));
+        assert_eq!(seq[1], osc_special(11, config.theme.background.unwrap()));
     }
 }

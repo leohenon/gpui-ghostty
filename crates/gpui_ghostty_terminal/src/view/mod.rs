@@ -12,11 +12,21 @@ use std::sync::Once;
 
 fn style_to_flags(s: &ghostty_vt::CellStyle) -> u8 {
     let mut f: u8 = 0;
-    if s.bold { f |= 0x02; }
-    if s.italic { f |= 0x04; }
-    if s.underline != 0 { f |= 0x08; }
-    if s.faint { f |= 0x10; }
-    if s.strikethrough { f |= 0x40; }
+    if s.bold {
+        f |= 0x02;
+    }
+    if s.italic {
+        f |= 0x04;
+    }
+    if s.underline != 0 {
+        f |= 0x08;
+    }
+    if s.faint {
+        f |= 0x10;
+    }
+    if s.strikethrough {
+        f |= 0x40;
+    }
     f
 }
 
@@ -63,9 +73,7 @@ fn is_named_key(key: &str) -> bool {
             | "enter"
             | "tab"
             | "escape"
-    ) || key.starts_with('f')
-        && key.len() >= 2
-        && key.as_bytes()[1].is_ascii_digit()
+    ) || key.starts_with('f') && key.len() >= 2 && key.as_bytes()[1].is_ascii_digit()
 }
 
 pub(crate) fn should_skip_key_down_for_ime(has_input: bool, keystroke: &gpui::Keystroke) -> bool {
@@ -306,6 +314,14 @@ impl TerminalView {
         self.font_features = features;
         self.line_layouts.clear();
         self.line_layout_key = None;
+    }
+
+    pub fn apply_terminal_config(&mut self, config: crate::TerminalConfig, cx: &mut Context<Self>) {
+        self.session.apply_config(config);
+        self.refresh_viewport();
+        self.line_layouts.clear();
+        self.line_layout_key = None;
+        cx.notify();
     }
 
     pub fn new_with_input(
@@ -706,7 +722,9 @@ impl TerminalView {
                 ))
             })
             .unwrap_or((0, 0));
-        let _ = self.session.resize(cols, rows, cell_width_px, cell_height_px);
+        let _ = self
+            .session
+            .resize(cols, rows, cell_width_px, cell_height_px);
         if let Some(callback) = self.resize_callback.as_ref() {
             callback(cols, rows, cell_width_px as u16, cell_height_px as u16);
         }
@@ -1680,6 +1698,67 @@ fn shape_terminal_line(
         .shape_line(text, font_size, &runs, force_width)
 }
 
+fn style_runs_with_selection_foreground(
+    line: &str,
+    style_runs: &[StyleRun],
+    selection: Option<(usize, usize)>,
+    selection_fg: Option<Rgb>,
+) -> Vec<StyleRun> {
+    let Some((start, end)) = selection.filter(|(start, end)| start < end) else {
+        return style_runs.to_vec();
+    };
+    let Some(selection_fg) = selection_fg else {
+        return style_runs.to_vec();
+    };
+
+    let start_col = column_for_byte_index_in_line(line, start);
+    let end_col = column_for_byte_index_in_line(line, end);
+    if start_col >= end_col {
+        return style_runs.to_vec();
+    }
+
+    let mut out = Vec::with_capacity(style_runs.len().saturating_add(2));
+    for run in style_runs {
+        let run_end = run.end_col.saturating_add(1);
+        if run.end_col < start_col || run.start_col >= end_col {
+            out.push(run.clone());
+            continue;
+        }
+
+        if run.start_col < start_col {
+            out.push(StyleRun {
+                start_col: run.start_col,
+                end_col: start_col.saturating_sub(1),
+                fg: run.fg,
+                bg: run.bg,
+                flags: run.flags,
+            });
+        }
+
+        let selected_start = run.start_col.max(start_col);
+        let selected_end = run_end.min(end_col).saturating_sub(1);
+        out.push(StyleRun {
+            start_col: selected_start,
+            end_col: selected_end,
+            fg: selection_fg,
+            bg: run.bg,
+            flags: run.flags,
+        });
+
+        if run_end > end_col {
+            out.push(StyleRun {
+                start_col: end_col,
+                end_col: run.end_col,
+                fg: run.fg,
+                bg: run.bg,
+                flags: run.flags,
+            });
+        }
+    }
+
+    out
+}
+
 pub(crate) fn byte_index_for_column_in_line(line: &str, col: u16) -> usize {
     use unicode_width::UnicodeWidthChar as _;
 
@@ -1708,6 +1787,30 @@ pub(crate) fn byte_index_for_column_in_line(line: &str, col: u16) -> usize {
     }
 
     line.len()
+}
+
+fn column_for_byte_index_in_line(line: &str, byte_index: usize) -> u16 {
+    use unicode_width::UnicodeWidthChar as _;
+
+    let target = byte_index.min(line.len());
+    if target == 0 {
+        return 1;
+    }
+
+    let mut col = 1usize;
+    for (idx, ch) in line.char_indices() {
+        if idx >= target {
+            break;
+        }
+
+        let width = ch.width().unwrap_or(0);
+        if width == 0 {
+            continue;
+        }
+        col = col.saturating_add(width);
+    }
+
+    col as u16
 }
 
 struct TerminalTextElement {
@@ -1883,6 +1986,7 @@ impl Element for TerminalTextElement {
             )
         };
 
+        let selection_foreground = { self.view.read(cx).session.selection_foreground() };
         let mut paint_lines = shaped_lines.clone();
         for (row, line) in viewport_lines.iter().enumerate() {
             let Some(sanitized) = sanitize_line_for_graphics(line) else {
@@ -1892,9 +1996,26 @@ impl Element for TerminalTextElement {
                 .get(row)
                 .map(|runs| runs.as_slice())
                 .unwrap_or(&[]);
+            let selection = selection.as_ref().and_then(|sel| {
+                let range = sel.range();
+                let &line_start = line_offsets.get(row)?;
+                let line_end = line_start.saturating_add(line.len());
+                let seg_start = range.start.max(line_start).min(line_end);
+                let seg_end = range.end.max(line_start).min(line_end);
+                (seg_start < seg_end).then_some((
+                    seg_start.saturating_sub(line_start),
+                    seg_end.saturating_sub(line_start),
+                ))
+            });
+            let styled = style_runs_with_selection_foreground(
+                &sanitized,
+                style_runs,
+                selection,
+                selection_foreground,
+            );
             if let Some(slot) = paint_lines.get_mut(row) {
                 *slot = shape_terminal_line(
-                    window, &sanitized, style_runs, font_size, &run_font, run_color, cell_width,
+                    window, &sanitized, &styled, font_size, &run_font, run_color, cell_width,
                 );
             }
         }
@@ -1986,7 +2107,13 @@ impl Element for TerminalTextElement {
             .map(|sel| sel.range())
             .filter(|range| !range.is_empty())
             .map(|range| {
-                let highlight = hsla(0.58, 0.9, 0.55, 0.35);
+                let highlight = self
+                    .view
+                    .read(cx)
+                    .session
+                    .selection_background()
+                    .map(hsla_from_rgb)
+                    .unwrap_or_else(|| hsla(0.58, 0.9, 0.55, 0.35));
                 let mut quads = Vec::new();
 
                 for (row, line) in shaped_lines.iter().enumerate() {
@@ -2104,7 +2231,13 @@ impl Element for TerminalTextElement {
         .and_then(|(info, focused)| {
             let cw = cell_width?;
             let background = { self.view.read(cx).session.default_background() };
-            let cursor_color = cursor_color_for_background(background);
+            let cursor_color = self
+                .view
+                .read(cx)
+                .session
+                .cursor_color()
+                .map(hsla_from_rgb)
+                .unwrap_or_else(|| cursor_color_for_background(background));
             let y = bounds.top() + line_height * info.y as f32;
             let row_index = info.y as usize;
             let line = shaped_lines.get(row_index)?;
@@ -2313,7 +2446,11 @@ pub(crate) fn cell_metrics(
 mod tests {
     use ghostty_vt::Rgb;
 
-    use super::{url_at_byte_index, url_at_column_in_line, window_position_to_local};
+    use super::{
+        StyleRun, byte_index_for_column_in_line, column_for_byte_index_in_line,
+        style_runs_with_selection_foreground, url_at_byte_index, url_at_column_in_line,
+        window_position_to_local,
+    };
 
     #[test]
     fn url_detection_finds_https_links() {
@@ -2360,6 +2497,45 @@ mod tests {
     }
 
     #[test]
+    fn selection_foreground_splits_style_runs() {
+        let runs = vec![StyleRun {
+            start_col: 1,
+            end_col: 5,
+            fg: Rgb { r: 1, g: 2, b: 3 },
+            bg: Rgb { r: 4, g: 5, b: 6 },
+            flags: 0,
+        }];
+
+        let styled = style_runs_with_selection_foreground(
+            "hello",
+            &runs,
+            Some((1, 4)),
+            Some(Rgb {
+                r: 0xAA,
+                g: 0xBB,
+                b: 0xCC,
+            }),
+        );
+
+        assert_eq!(styled.len(), 3);
+        assert_eq!(styled[0].start_col, 1);
+        assert_eq!(styled[0].end_col, 1);
+        assert_eq!(styled[1].start_col, 2);
+        assert_eq!(styled[1].end_col, 4);
+        assert_eq!(styled[1].fg.r, 0xAA);
+        assert_eq!(styled[2].start_col, 5);
+        assert_eq!(styled[2].end_col, 5);
+    }
+
+    #[test]
+    fn byte_and_column_helpers_round_trip_ascii_columns() {
+        let line = "hello";
+        let byte = byte_index_for_column_in_line(line, 3);
+        assert_eq!(byte, 2);
+        assert_eq!(column_for_byte_index_in_line(line, byte), 3);
+    }
+
+    #[test]
     fn cursor_color_contrasts_with_background() {
         let cursor = super::cursor_color_for_background(Rgb {
             r: 0xFF,
@@ -2367,7 +2543,7 @@ mod tests {
             b: 0xFF,
         });
         assert!(cursor.l < 0.2);
-        assert!((cursor.a - 0.72).abs() < f32::EPSILON);
+        assert!((cursor.a - 0.9).abs() < f32::EPSILON);
 
         let cursor = super::cursor_color_for_background(Rgb {
             r: 0x00,
@@ -2375,6 +2551,6 @@ mod tests {
             b: 0x00,
         });
         assert!(cursor.l > 0.8);
-        assert!((cursor.a - 0.72).abs() < f32::EPSILON);
+        assert!((cursor.a - 0.9).abs() < f32::EPSILON);
     }
 }
